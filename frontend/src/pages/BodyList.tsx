@@ -31,7 +31,6 @@ import { useCoatProgress } from '@/hooks/useCoatProgress';
 import { useIdbTable } from '@/hooks/useIdbTable';
 import { ROUTES } from '@/router';
 import { DEFAULT_BODY_FILTERS, selectFilteredBodies, useBodyStore } from '@/stores/bodyStore';
-import { useCoatStore } from '@/stores/coatStore';
 import type { Inlay } from '@/types/inlay';
 import {
   BODY_MATERIAL_LABEL,
@@ -73,7 +72,6 @@ export default function BodyList() {
 
   const inlayTable = useIdbTable<Inlay>((database) => database.inlays, { sortByUpdatedAt: false });
   const { progressOf, currentCoatText, totals } = useCoatProgress();
-  const coats = useCoatStore((state) => state.coats);
 
   const url = useFilterQuery(FILTER_KEYS);
   const [editing, setEditing] = useState<Body | null>(null);
@@ -146,6 +144,7 @@ export default function BodyList() {
         <StatBadge label="道次完成率" value={`${totals.percent}%`} percent={totals.percent} tone="success" />
         <StatBadge label="待复检道次" value={totals.recheck} suffix="道" tone="warning" />
         <StatBadge label="荫房超标" value={totals.roomOver} suffix="次" tone="danger" />
+        <StatBadge label="对账挂起" value={totals.suspended} suffix="条" tone="danger" />
         <StatBadge label="镶嵌登记" value={inlayTotal} suffix="条" tone="info" />
       </div>
 
@@ -181,7 +180,7 @@ export default function BodyList() {
           <Row gutter={[16, 16]}>
             {filtered.map((body) => {
               const stat = progressOf(body.id);
-              const recheck = coats.some((coat) => coat.bodyId === body.id && coat.needRecheck);
+              const recheck = stat.pendingRecheckCoats > 0;
               return (
                 <Col key={body.id} xs={24} md={12} xl={8}>
                   <Card
@@ -221,7 +220,7 @@ export default function BodyList() {
                       <Typography.Text type="secondary">当前工序：{currentCoatText(body.id)}</Typography.Text>
                       <Typography.Text type="secondary">最近荫房：{stat.lastRoomVerdict}</Typography.Text>
                       <Typography.Text type="secondary">
-                        荫干等待 {stat.dryingHours} 小时 · 荫房超标 {stat.roomOverCount} 次
+                        荫干等待 {stat.dryingHours} 小时 · 荫房超标 {stat.roomOverCount} 次 · 待复检 {stat.pendingRecheckCoats} 道 · 对账挂起 {stat.suspendedRooms} 条
                       </Typography.Text>
                       <Space size={4} wrap onClick={(event) => event.stopPropagation()}>
                         <Tooltip title="按 待髹涂 → 髹涂中 → 待荫干 → 已完成 推进">

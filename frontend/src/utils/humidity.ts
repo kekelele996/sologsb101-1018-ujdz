@@ -57,11 +57,26 @@ export function roomStayHours(inAt: string, outAt: string): number {
   return Math.round((normalized / 60) * 10) / 10;
 }
 
-/** 漆种建议间隔（小时） */
+/** 漆种建议间隔（小时），同时作为该漆种最短荫干时长基准 */
 export function suggestIntervalHours(paintType: PaintType): number {
   if (paintType === 'raw') return 24;
   if (paintType === 'color') return 18;
   return 12;
+}
+
+/**
+ * 道次荫干时长建议（小时）：取「环境 / 厚度推算时长」与「漆种最短基准」的较大值。
+ * 漆种改动后该建议需重新计算（见 coat.recomputeDryingAdvice）。
+ */
+export function recommendDryingHours(
+  paintType: PaintType,
+  tempC: number,
+  humidityPct: number,
+  thicknessUm: number,
+): number {
+  const byEnvironment = dryingHours(tempC, humidityPct, thicknessUm);
+  const byPaint = suggestIntervalHours(paintType);
+  return Math.round(Math.max(byEnvironment, byPaint) * 10) / 10;
 }
 
 /** 按器型与上一道漆种给出建议漆种：小件多罩漆，大件多生漆打底 */

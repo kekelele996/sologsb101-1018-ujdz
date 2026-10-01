@@ -7,8 +7,9 @@ import type { Coat } from '@/types/coat';
 import type { Room } from '@/types/room';
 import type { Inspect } from '@/types/inspect';
 import { BODY_MATERIAL_LABEL, BODY_SHAPE_LABEL } from '@/types/body';
-import { COAT_STATE_LABEL, PAINT_TYPE_LABEL } from '@/types/coat';
-import { ROOM_VERDICT_LABEL } from '@/types/room';
+import { COAT_RECHECK_LABEL, COAT_STATE_LABEL, PAINT_TYPE_LABEL } from '@/types/coat';
+import { ROOM_VERDICT_LABEL, RECONCILE_LABEL } from '@/types/room';
+import { effectiveReconcile } from './reconcile';
 import { INSPECT_VERDICT_LABEL } from '@/types/inspect';
 import type { LacquerSnapshot } from './db';
 
@@ -68,7 +69,7 @@ export function buildReworkList(
     lines.push(
       `   定位道次：${
         coat
-          ? `第 ${coat.seq} 道 · ${PAINT_TYPE_LABEL[coat.paintType]} · ${coat.colorName} · ${COAT_STATE_LABEL[coat.state]}`
+          ? `第 ${coat.seq} 道 · ${PAINT_TYPE_LABEL[coat.paintType]} · ${coat.colorName} · ${COAT_STATE_LABEL[coat.state]} · 复检${COAT_RECHECK_LABEL[coat.recheckStatus]}`
           : '未指定'
       }`,
     );
@@ -96,43 +97,72 @@ export function exportReworkList(
   return filename;
 }
 
-/** 工序台账 CSV（全部胎体 + 道次 + 荫房） */
+/** 工序台账 CSV（全部胎体 + 道次 + 挂接到道次的荫房记录；两侧各自留底字段并列） */
 export function exportLedgerCsv(bodies: Body[], coats: Coat[], rooms: Room[]): string {
-  const header = ['胎体编号', '材质', '器型', '尺寸(mm)', '委托/藏家', '道次', '漆种', '色名', '涂刷日期', '湿膜(μm)', '道次状态', '待复检', '荫房日期', '温度(℃)', '湿度(%)', '判定'];
+  const header = [
+    '胎体编号', '材质', '器型', '尺寸(mm)', '委托/藏家',
+    '道次', '漆种', '色名', '涂刷日期', '湿膜(μm)', '道次状态', '管理员复检结论', '荫干建议(小时)',
+    '管理员记账入荫', '管理员记账出荫',
+    '荫房日期', '温度(℃)', '湿度(%)', '值守判定', '时段对账',
+  ];
   const lines: string[] = [header.map(csvCell).join(',')];
+  const coatById = new Map(coats.map((coat) => [coat.id, coat]));
   bodies.forEach((body) => {
     const bodyCoats = coats.filter((item) => item.bodyId === body.id).sort((a, b) => a.seq - b.seq);
     const bodyRooms = rooms.filter((item) => item.bodyId === body.id);
-    const rowCount = Math.max(bodyCoats.length, bodyRooms.length, 1);
-    for (let index = 0; index < rowCount; index += 1) {
-      const coat = bodyCoats[index];
-      const room = bodyRooms[index];
-      lines.push(
-        [
-          index === 0 ? body.code : '',
-          index === 0 ? BODY_MATERIAL_LABEL[body.material] : '',
-          index === 0 ? BODY_SHAPE_LABEL[body.shape] : '',
-          index === 0 ? body.sizeMm : '',
-          index === 0 ? body.ownerName : '',
-          coat ? coat.seq : '',
-          coat ? PAINT_TYPE_LABEL[coat.paintType] : '',
-          coat ? coat.colorName : '',
-          coat ? coat.coatDate : '',
-          coat ? coat.thicknessUm : '',
-          coat ? COAT_STATE_LABEL[coat.state] : '',
-          coat ? (coat.needRecheck ? '是' : '否') : '',
-          room ? room.date : '',
-          room ? room.tempC : '',
-          room ? room.humidityPct : '',
-          room ? ROOM_VERDICT_LABEL[room.verdict] : '',
-        ]
-          .map(csvCell)
-          .join(','),
-      );
-    }
+    bodyCoats.forEach((coat, coatIndex) => {
+      const roomsOnCoat = bodyRooms
+        .filter((room) => room.coatId === coat.id)
+        .sort((a, b) => a.date.localeCompare(b.date));
+      const rowCount = Math.max(roomsOnCoat.length, 1);
+      for (let index = 0; index < rowCount; index += 1) {
+        const room = roomsOnCoat[index];
+        lines.push(
+          [
+            coatIndex === 0 && index === 0 ? body.code : '',
+            coatIndex === 0 && index === 0 ? BODY_MATERIAL_LABEL[body.material] : '',
+            coatIndex === 0 && index === 0 ? BODY_SHAPE_LABEL[body.shape] : '',
+            coatIndex === 0 && index === 0 ? body.sizeMm : '',
+            coatIndex === 0 && index === 0 ? body.ownerName : '',
+            coat.seq,
+            PAINT_TYPE_LABEL[coat.paintType],
+            coat.colorName,
+            coat.coatDate,
+            coat.thicknessUm,
+            COAT_STATE_LABEL[coat.state],
+            COAT_RECHECK_LABEL[coat.recheckStatus],
+            coat.dryingAdviceHours ?? '',
+            coat.dryingFrom.replace('T', ' '),
+            coat.dryingTo.replace('T', ' '),
+            room ? room.date : '',
+            room ? room.tempC : '',
+            room ? room.humidityPct : '',
+            room ? ROOM_VERDICT_LABEL[room.verdict] : '',
+            room ? RECONCILE_LABEL[effectiveReconcile(room, coatById.get(room.coatId ?? ''))] : '',
+          ]
+            .map(csvCell)
+            .join(','),
+        );
+      }
+    });
+    // 未挂接到任何现存道次的荫房记录单独列出（两侧留底，不丢记录）
+    bodyRooms
+      .filter((room) => !room.coatId || !coatById.has(room.coatId))
+      .forEach((room) => {
+        lines.push(
+          [
+            '', '', '', '', '',
+            room.coatId ? '道次已删除' : '未挂道次', '', '', '', '', '', '', '', '', '',
+            room.date, room.tempC, room.humidityPct, ROOM_VERDICT_LABEL[room.verdict],
+            RECONCILE_LABEL[effectiveReconcile(room, undefined)],
+          ]
+            .map(csvCell)
+            .join(','),
+        );
+      });
   });
   const filename = `漆器髹涂台账-${stampSuffix()}.csv`;
-  download(filename, `\uFEFF${lines.join('\n')}`, 'text/csv;charset=utf-8');
+  download(filename, `﻿${lines.join('\n')}`, 'text/csv;charset=utf-8');
   return filename;
 }
 

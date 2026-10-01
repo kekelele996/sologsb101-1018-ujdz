@@ -19,6 +19,7 @@ import { useBodyStore } from './stores/bodyStore';
 import { useCoatStore } from './stores/coatStore';
 import { useRoomStore } from './stores/roomStore';
 import { initDatabase } from './utils/db';
+import { countPendingRecheckCoats } from './utils/reconcile';
 import { BODY_MATERIAL_LABEL, BODY_SHAPE_LABEL, BODY_STATE_LABEL } from './types/body';
 
 const { Header, Sider, Content, Footer } = Layout;
@@ -131,7 +132,7 @@ export default function App() {
             <Button size="small" onClick={() => navigate(ROUTES.coats)}>
               进入道次编排
             </Button>
-            <Badge count={coats.filter((coat) => coat.needRecheck).length} color="#c9963c" title="待复检道次" />
+            <Badge count={countPendingRecheckCoats(coats, rooms)} color="#c9963c" title="挂着超标荫房记录、待管理员复检的道次" />
           </Space>
         </Header>
 

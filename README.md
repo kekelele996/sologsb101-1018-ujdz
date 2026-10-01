@@ -44,7 +44,7 @@ docker compose up -d --build      # 代码改动后重新构建
 | 构建工具 | Vite 5 | 开发服务器端口 22818 |
 | 状态管理 | Zustand 4 | `bodyStore` / `coatStore` / `roomStore` |
 | 路由 | React Router 6（`createBrowserRouter`，history 模式） | nginx 侧配合 `try_files` 做 SPA fallback |
-| 本地存储 | Dexie 4（IndexedDB 封装）+ localStorage | 含数据结构版本号与 v1→v2 升级迁移 |
+| 本地存储 | Dexie 4（IndexedDB 封装）+ localStorage | 含数据结构版本号与 v1→v2→v3 升级迁移（v3 两侧解耦、荫房记录归道次） |
 | 容器化 | Docker 多阶段构建：`node:20-alpine` → `nginx:alpine` | 构建阶段类型检查 + 打包，运行阶段仅托管静态产物 |
 
 ---
@@ -68,9 +68,9 @@ npm run preview    # 本地预览构建产物（http://localhost:22818）
 | 路由 | 页面 | 主要职责 | 消费模型 |
 | --- | --- | --- | --- |
 | `/bodies` | 胎体与器型台账 | 新建胎体、按材质与器型筛选（同步 URL query），卡片回显已完成道次与最近荫房记录 | Body、Coat、Room |
-| `/coats` | 髹涂道次编排 | 拖拽调整道次先后并重编号、批量改漆种与状态、同器型自动带出上次漆种与间隔建议 | Coat、Body |
-| `/rooms` | 荫房温湿度记录 | 按区间判定适宜 / 偏干 / 偏湿，越界回写关联道次为「待复检」，支持日期区间筛选 | Room、Coat |
-| `/polish` | 打磨与推光工序 | 按道次生成目数序列（320→2000），未打磨完的道次禁止进入下一道罩漆 | Polish、Coat |
+| `/coats` | 髹涂道次编排（管理员侧） | 拖拽调整道次先后并重编号、批量改漆种与状态、**对挂到道次的超标荫房记录复检定结论**、记账道次荫干时段、漆种变更后重算荫干建议 | Coat、Room（只读） |
+| `/rooms` | 荫房温湿度记录（值守侧） | 按区间判定适宜 / 偏干 / 偏湿，记录**挂到具体道次**（越界只等管理员复检，不回写道次），发起两侧荫干时段对账（对不上挂起等核） | Room、Coat（只读） |
+| `/polish` | 打磨与推光工序 | 按道次生成目数序列（按 `coatId` 稳定挂道次，重排 / 改漆种不影响），未打磨完的道次禁止进入下一道罩漆 | Polish、Coat |
 | `/inlays` | 镶嵌纹饰登记 | 螺钿 / 蛋壳 / 描金 / 戗金登记与批量调整分类，器型示意区叠加显示 | Inlay、Body |
 | `/export` | 成品质检与导出 | 质检登记（返工定位到具体道次与荫房记录）、返工清单、JSON 导入导出与清空重播种 | Inspect 及全部模型 |
 
@@ -83,13 +83,23 @@ npm run preview    # 本地预览构建产物（http://localhost:22818）
 | 模型 | 文件 | 关键字段 | 说明 |
 | --- | --- | --- | --- |
 | Body 胎体 | `src/types/body.ts` | `id` `code` `material`（木/脱胎/金属） `shape`（碗/盘/盒/瓶） `sizeMm` `ownerName` `state`（待髹涂/髹涂中/待荫干/已完成） | 新建后进入道次编排，卡片回显进度与最近荫房 |
-| Coat 髹涂道次 | `src/types/coat.ts` | `id` `bodyId` `seq` `paintType`（生漆/色漆/罩漆） `colorName` `coatDate` `thicknessUm` `state`（待涂/已涂/待打磨/已完成） `needRecheck` | 拖拽调序，同器型带出上次漆种与间隔建议 |
-| Room 荫房记录 | `src/types/room.ts` | `id` `bodyId` `date` `tempC` `humidityPct` `inAt` `outAt` `verdict`（适宜/偏干/偏湿） | 越界即回写关联道次为待复检 |
-| Polish 打磨推光 | `src/types/polish.ts` | `id` `bodyId` `seq` `grit` `method`（水砂/推光/揩清） `durationMin` `operator` | 按道次生成目数序列 |
+| Coat 髹涂道次（管理员侧） | `src/types/coat.ts` | `id` `bodyId` `seq` `paintType`（生漆/色漆/罩漆） `colorName` `coatDate` `thicknessUm` `state`；复检 `recheckStatus/recheckAt/recheckNote`；记账时段 `dryingFrom/dryingTo`；建议 `dryingAdviceHours/dryingAdvicePaintType/dryingAdviceAt` | 拖拽调序；复检结论只由管理员定；漆种一改建议即失效，需重算 |
+| Room 荫房记录（值守侧） | `src/types/room.ts` | `id` `bodyId` `coatId`（挂道次） `date` `tempC` `humidityPct` `inAt` `outAt` `verdict`（适宜/偏干/偏湿） `reconcileStatus/reconcileAt`（待核/一致/挂起） | 越界只挂道次等复检，不回写；与道次记账时段对账，对不上挂起等核 |
+| Polish 打磨推光 | `src/types/polish.ts` | `id` `bodyId` `coatId`（稳定挂道次） `grit` `method`（水砂/推光/揩清） `durationMin` `operator` | 按道次生成目数序列；道次重排不改打磨 |
 | Inlay 镶嵌 | `src/types/inlay.ts` | `id` `bodyId` `type`（螺钿/蛋壳/描金/戗金） `pattern` `position` `materialNote` | 器型示意区叠加显示，支持批量改分类 |
 | Inspect 质检 | `src/types/inspect.ts` | `id` `bodyId` `verdict`（合格/返工） `defectNote` `inspector` `date` `defectCoatSeq` `defectRoomId` | 返工定位到道次与荫房记录并生成返工清单 |
 
-数据结构版本号 `DB_SCHEMA_VERSION` 定义在 `src/utils/db.ts`，当前为 `v2`：`coats` 表增加 `paintType` 索引，并在 Dexie `.upgrade()` 中为历史记录回填 `paintType = 'raw'`、`needRecheck = false`、`thicknessUm = 40`。
+### 两侧职责边界（v3）
+
+- **荫房值守（`/rooms` + `roomStore`）**：只写 `rooms` 表——温湿度登记、适宜度判定、发起对账。越界记录通过 `coatId` 挂到道次上等复检，**绝不回写**道次状态或复检结论；后补的记录不能改写管理员已定结论，只会再派生「待复检 n」。
+- **工序管理员（`/coats` + `coatStore`）**：只写 `coats` 表——编排 / 拖拽重排 / 状态推进 / 复检定结论 / 记账荫干时段 / 重算建议。改漆种让 `dryingAdvicePaintType` 与当前漆种不符，建议即标为失效；跨侧只读 `rooms` 取重算依据与对账比对。
+- **打磨（`/polish`）**：按 `coatId` 稳定挂道次，管理员拖拽重编号、改漆种都不会冲掉目数序列。
+- 跨侧派生（待复检徽标、有效对账状态）统一在 `src/utils/reconcile.ts` 只读计算；任一侧时段改动后对账自动回到「待核」。
+
+数据结构版本号 `DB_SCHEMA_VERSION` 定义在 `src/utils/db.ts`，当前为 **v3**：
+
+- v1 → v2：`coats` 增加 `paintType` 索引并回填历史记录；
+- v2 → v3：两侧解耦——`rooms` 增加 `coatId` 与对账字段（**升级时把历史荫房记录按「胎体 + 日期」归到当时已涂刷的最后一道**）；`coats` 去掉值守回写的 `needRecheck`，改为管理员复检结论 / 记账时段 / 荫干建议字段；`polishes` 改以 `coatId` 挂道次（按旧 `bodyId + seq` 回填）。导入旧版本 JSON 备份时走同一套归一逻辑（`normalizeSnapshot()`）。
 
 ---
 
@@ -105,7 +115,7 @@ sologsb101-1018/
 │   │   ├── hooks/                # useCoatProgress.ts useIdbTable.ts
 │   │   ├── pages/                # BodyList.tsx CoatBoard.tsx RoomLog.tsx PolishBoard.tsx InlayBoard.tsx ExportView.tsx
 │   │   ├── router/               # index.tsx
-│   │   ├── utils/                # humidity.ts db.ts export.ts
+│   │   ├── utils/                # humidity.ts（温湿度判定/建议）reconcile.ts（两侧只读派生：复检视图/对账）db.ts export.ts
 │   │   ├── styles/               # main.css
 │   │   ├── App.tsx main.tsx
 │   ├── public/favicon.svg

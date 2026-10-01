@@ -114,6 +114,10 @@ export interface BodyStat {
   roomOverCount: number;
   /** 最近一次荫房判定文案 */
   lastRoomVerdict: string;
+  /** 挂着超标线索、待管理员复检的道次数（派生） */
+  pendingRecheckCoats: number;
+  /** 对账「对不上 / 挂起」的荫房记录条数（派生） */
+  suspendedRooms: number;
   /** 打磨道次条数 */
   polishCount: number;
   /** 镶嵌登记条数 */

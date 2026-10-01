@@ -1,6 +1,8 @@
 /**
- * useCoatProgress()：按胎体统计道次完成度、当前道次、荫干等待时长与复检标记
- * 被道次页（/coats）、荫房页（/rooms）、打磨页（/polish）与胎体页（/bodies）消费。
+ * useCoatProgress()：按胎体统计道次完成度、当前道次、荫干等待时长与复检 / 对账派生标记
+ * 被道次页（/coats）、打磨页（/polish）与胎体页（/bodies）消费。
+ *
+ * 所有跨侧结论（待复检、对账挂起）均由 coats + rooms 只读派生，不回写任何一侧。
  */
 import { useCallback, useMemo } from 'react';
 import { useBodyStore } from '@/stores/bodyStore';
@@ -9,6 +11,7 @@ import { useRoomStore } from '@/stores/roomStore';
 import { dryingHours, roomStayHours } from '@/utils/humidity';
 import { ROOM_VERDICT_LABEL } from '@/types/room';
 import { COAT_STATE_LABEL } from '@/types/coat';
+import { coatRecheckView, effectiveReconcile } from '@/utils/reconcile';
 import type { BodyStat } from '@/types/body';
 
 const EMPTY_STAT: BodyStat = {
@@ -20,6 +23,8 @@ const EMPTY_STAT: BodyStat = {
   roomCount: 0,
   roomOverCount: 0,
   lastRoomVerdict: '暂无记录',
+  pendingRecheckCoats: 0,
+  suspendedRooms: 0,
   polishCount: 0,
   inlayCount: 0,
   dryingHours: 0,
@@ -30,8 +35,8 @@ export interface CoatProgressResult {
   map: Record<string, BodyStat>;
   /** 与胎体列表同序的统计数组 */
   list: BodyStat[];
-  /** 汇总：道次总数 / 已完成 / 待复检 */
-  totals: { coatTotal: number; coatDone: number; percent: number; recheck: number; roomOver: number };
+  /** 汇总：道次总数 / 已完成 / 待复检 / 挂起 */
+  totals: { coatTotal: number; coatDone: number; percent: number; recheck: number; roomOver: number; suspended: number };
   /** 取单个胎体的统计（不存在时返回空统计） */
   progressOf: (bodyId: string) => BodyStat;
   /** 取单个胎体的当前道次文案 */
@@ -44,6 +49,7 @@ export function useCoatProgress(): CoatProgressResult {
   const rooms = useRoomStore((state) => state.rooms);
 
   const map = useMemo<Record<string, BodyStat>>(() => {
+    const coatById = new Map(coats.map((coat) => [coat.id, coat]));
     const result: Record<string, BodyStat> = {};
     bodies.forEach((body) => {
       const bodyCoats = coats
@@ -56,6 +62,18 @@ export function useCoatProgress(): CoatProgressResult {
       const current = bodyCoats.find((coat) => coat.state !== 'done');
       const lastRoom = bodyRooms[bodyRooms.length - 1];
       const overCount = bodyRooms.filter((room) => room.verdict !== 'suitable').length;
+
+      let pendingRecheckCoats = 0;
+      bodyCoats.forEach((coat) => {
+        const onCoat = bodyRooms.filter((room) => room.coatId === coat.id);
+        if (coatRecheckView(coat, onCoat).pending) pendingRecheckCoats += 1;
+      });
+
+      const suspendedRooms = bodyRooms.filter((room) => {
+        const coat = room.coatId ? coatById.get(room.coatId) : undefined;
+        return effectiveReconcile(room, coat) === 'suspended';
+      }).length;
+
       const waitHours = lastRoom
         ? roomStayHours(lastRoom.inAt, lastRoom.outAt)
         : lastRoom === undefined && bodyCoats[0]
@@ -72,6 +90,8 @@ export function useCoatProgress(): CoatProgressResult {
         lastRoomVerdict: lastRoom
           ? `${lastRoom.date}　${lastRoom.tempC}℃ / ${lastRoom.humidityPct}%（${ROOM_VERDICT_LABEL[lastRoom.verdict]}）`
           : '暂无记录',
+        pendingRecheckCoats,
+        suspendedRooms,
         polishCount: 0,
         inlayCount: 0,
         dryingHours: waitHours,
@@ -85,14 +105,19 @@ export function useCoatProgress(): CoatProgressResult {
   const totals = useMemo(() => {
     const coatTotal = list.reduce((sum, item) => sum + item.coatTotal, 0);
     const coatDone = list.reduce((sum, item) => sum + item.coatDone, 0);
+    const coatById = new Map(coats.map((coat) => [coat.id, coat]));
     return {
       coatTotal,
       coatDone,
       percent: coatTotal === 0 ? 0 : Math.round((coatDone / coatTotal) * 100),
-      recheck: coats.filter((coat) => coat.needRecheck).length,
+      recheck: list.reduce((sum, item) => sum + item.pendingRecheckCoats, 0),
       roomOver: list.reduce((sum, item) => sum + item.roomOverCount, 0),
+      suspended: rooms.reduce((sum, room) => {
+        const coat = room.coatId ? coatById.get(room.coatId) : undefined;
+        return sum + (effectiveReconcile(room, coat) === 'suspended' ? 1 : 0);
+      }, 0),
     };
-  }, [coats, list]);
+  }, [coats, list, rooms]);
 
   const progressOf = useCallback(
     (bodyId: string): BodyStat => map[bodyId] ?? { ...EMPTY_STAT, bodyId },
