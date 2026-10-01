@@ -37,6 +37,7 @@ import { useIdbTable } from '@/hooks/useIdbTable';
 import { useBodyStore } from '@/stores/bodyStore';
 import { useCoatStore } from '@/stores/coatStore';
 import { useRoomStore } from '@/stores/roomStore';
+import { useRecheckStore } from '@/stores/recheckStore';
 import { COAT_STATE_LABEL, PAINT_TYPE_LABEL } from '@/types/coat';
 import { BODY_SHAPE_LABEL } from '@/types/body';
 import { ROOM_VERDICT_LABEL } from '@/types/room';
@@ -74,6 +75,8 @@ export default function ExportView() {
   const loadCoats = useCoatStore((state) => state.loadCoats);
   const rooms = useRoomStore((state) => state.rooms);
   const loadRooms = useRoomStore((state) => state.loadRooms);
+  const rechecks = useRecheckStore((state) => state.rechecks);
+  const loadRechecks = useRecheckStore((state) => state.loadRechecks);
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Inspect | null>(null);
@@ -176,7 +179,7 @@ export default function ExportView() {
       cancelText: '取消',
       onOk: async () => {
         await importSnapshot(parsed as LacquerSnapshot);
-        await Promise.all([loadBodies(), loadCoats(), loadRooms()]);
+        await Promise.all([loadBodies(), loadCoats(), loadRooms(), loadRechecks()]);
         message.success('导入完成，数据已覆盖');
       },
     });
@@ -184,7 +187,7 @@ export default function ExportView() {
 
   const handleReset = async (): Promise<void> => {
     await resetDatabase();
-    await Promise.all([loadBodies(), loadCoats(), loadRooms()]);
+    await Promise.all([loadBodies(), loadCoats(), loadRooms(), loadRechecks()]);
     message.success('已清空并重新载入演示数据');
   };
 
@@ -372,7 +375,7 @@ export default function ExportView() {
           <Card title="整库导出" style={{ marginTop: 16 }}>
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
               <Typography.Text type="secondary">
-                导出文件包含 6 张业务表全量数据与结构版本号，可在其他设备通过「导入 JSON」还原。
+                导出文件包含 7 张业务表全量数据与结构版本号，可在其他设备通过「导入 JSON」还原。
               </Typography.Text>
               <Space wrap>
                 <Button icon={<CloudDownloadOutlined />} onClick={() => void handleExport()}>
@@ -380,7 +383,7 @@ export default function ExportView() {
                 </Button>
                 <Button
                   onClick={() => {
-                    const filename = exportLedgerCsv(bodies, coats, rooms);
+                    const filename = exportLedgerCsv(bodies, coats, rooms, rechecks);
                     message.success(`已导出 ${filename}`);
                   }}
                 >

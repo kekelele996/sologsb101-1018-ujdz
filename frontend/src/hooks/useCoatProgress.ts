@@ -6,6 +6,7 @@ import { useCallback, useMemo } from 'react';
 import { useBodyStore } from '@/stores/bodyStore';
 import { useCoatStore } from '@/stores/coatStore';
 import { useRoomStore } from '@/stores/roomStore';
+import { useRecheckStore } from '@/stores/recheckStore';
 import { dryingHours, roomStayHours } from '@/utils/humidity';
 import { ROOM_VERDICT_LABEL } from '@/types/room';
 import { COAT_STATE_LABEL } from '@/types/coat';
@@ -42,6 +43,7 @@ export function useCoatProgress(): CoatProgressResult {
   const bodies = useBodyStore((state) => state.bodies);
   const coats = useCoatStore((state) => state.coats);
   const rooms = useRoomStore((state) => state.rooms);
+  const rechecks = useRecheckStore((state) => state.rechecks);
 
   const map = useMemo<Record<string, BodyStat>>(() => {
     const result: Record<string, BodyStat> = {};
@@ -89,10 +91,10 @@ export function useCoatProgress(): CoatProgressResult {
       coatTotal,
       coatDone,
       percent: coatTotal === 0 ? 0 : Math.round((coatDone / coatTotal) * 100),
-      recheck: coats.filter((coat) => coat.needRecheck).length,
+      recheck: rechecks.filter((recheck) => recheck.status === 'pending').length,
       roomOver: list.reduce((sum, item) => sum + item.roomOverCount, 0),
     };
-  }, [coats, list]);
+  }, [rechecks, list]);
 
   const progressOf = useCallback(
     (bodyId: string): BodyStat => map[bodyId] ?? { ...EMPTY_STAT, bodyId },

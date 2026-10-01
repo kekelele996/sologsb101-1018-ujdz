@@ -1,13 +1,16 @@
 /**
  * 髹涂道次状态管理（Zustand）
  * 维护道次顺序与状态推进，支持拖拽重排落库重编号、批量改漆种与状态。
+ * 道次只管道次编排与推进：荫干时长建议由漆种 + 湿膜厚度算出，漆种改动即失效重算；
+ * 荫房越界挂起的复检项走 recheckStore，本 store 不回写荫房记录。
  */
 import { create } from 'zustand';
 import { db, createId } from '@/utils/db';
 import type { Coat, CoatDraft, CoatState, PaintType } from '@/types/coat';
 import { nextCoatState } from '@/types/coat';
-import { suggestIntervalHours, suggestPaintType } from '@/utils/humidity';
+import { computeDryingHours, suggestIntervalHours, suggestPaintType } from '@/utils/humidity';
 import { useBodyStore } from './bodyStore';
+import { useRecheckStore } from './recheckStore';
 
 export interface PaintSuggestion {
   paintType: PaintType;
@@ -28,7 +31,7 @@ interface CoatStoreState {
   removeCoat: (id: string) => Promise<void>;
   batchUpdate: (ids: string[], patch: Partial<Coat>) => Promise<void>;
   advanceState: (id: string) => Promise<void>;
-  markRecheck: (bodyId: string, recheck: boolean) => Promise<void>;
+  recomputeDryingAdvice: (id: string) => Promise<void>;
   reorderCoats: (bodyId: string, orderedIds: string[]) => Promise<void>;
   nextSeq: (bodyId: string) => number;
   /** 同器型自动带出上次漆种与间隔建议 */
@@ -60,14 +63,37 @@ export const useCoatStore = create<CoatStoreState>((set, get) => ({
 
   async createCoat(draft) {
     const now = Date.now();
-    const row: Coat = { ...draft, id: createId('coat'), createdAt: now, updatedAt: now };
+    const dryingHours = computeDryingHours(draft.paintType, draft.thicknessUm);
+    const row: Coat = {
+      ...draft,
+      dryingHours,
+      dryingHoursPaintType: draft.paintType,
+      id: createId('coat'),
+      createdAt: now,
+      updatedAt: now,
+    };
     await db.coats.put(row);
     await get().loadCoats();
     return row;
   },
 
   async updateCoat(id, patch) {
-    await db.coats.update(id, { ...patch, updatedAt: Date.now() } as never);
+    const existing = get().coats.find((coat) => coat.id === id);
+    // 只落库有定义的字段，避免表单未管理的遗留字段（needRecheck 等）被写成 undefined
+    const nextPatch: Partial<Coat> = { updatedAt: Date.now() };
+    (Object.keys(patch) as Array<keyof Coat>).forEach((key) => {
+      if (patch[key] !== undefined) {
+        (nextPatch as Record<string, unknown>)[key] = patch[key];
+      }
+    });
+    // 漆种或湿膜厚度改动 → 荫干时长建议失效，按新漆种重算
+    if (existing && (patch.paintType !== undefined || patch.thicknessUm !== undefined)) {
+      const paintType = patch.paintType ?? existing.paintType;
+      const thicknessUm = patch.thicknessUm ?? existing.thicknessUm;
+      nextPatch.dryingHours = computeDryingHours(paintType, thicknessUm);
+      nextPatch.dryingHoursPaintType = paintType;
+    }
+    await db.coats.update(id, nextPatch as never);
     await get().loadCoats();
   },
 
@@ -90,7 +116,15 @@ export const useCoatStore = create<CoatStoreState>((set, get) => ({
     const now = Date.now();
     const rows = get()
       .coats.filter((coat) => ids.includes(coat.id))
-      .map((coat) => ({ ...coat, ...patch, updatedAt: now }));
+      .map((coat) => {
+        const next = { ...coat, ...patch, updatedAt: now };
+        // 批量改漆种 → 荫干时长建议随漆种重算
+        if (patch.paintType !== undefined) {
+          next.dryingHours = computeDryingHours(patch.paintType, next.thicknessUm);
+          next.dryingHoursPaintType = patch.paintType;
+        }
+        return next;
+      });
     await db.coats.bulkPut(rows);
     await get().loadCoats();
   },
@@ -101,13 +135,24 @@ export const useCoatStore = create<CoatStoreState>((set, get) => ({
     const next = nextCoatState(coat.state);
     if (next === coat.state) return;
     await get().updateCoat(id, { state: next });
+    // 推进到已完成：管理员销项该道次未决的复检挂起
+    if (next === 'done') {
+      await useRecheckStore.getState().resolvePendingForCoat(id, '道次完成自动销项');
+    }
   },
 
-  async markRecheck(bodyId, recheck) {
-    const affected = get().coats.filter((coat) => coat.bodyId === bodyId && coat.state !== 'done');
-    if (affected.length === 0) return;
+  async recomputeDryingAdvice(id) {
+    const coat = get().coats.find((item) => item.id === id);
+    if (!coat) return;
     const now = Date.now();
-    await db.coats.bulkPut(affected.map((coat) => ({ ...coat, needRecheck: recheck, updatedAt: now })));
+    await db.coats.update(
+      id,
+      {
+        dryingHours: computeDryingHours(coat.paintType, coat.thicknessUm),
+        dryingHoursPaintType: coat.paintType,
+        updatedAt: now,
+      } as never,
+    );
     await get().loadCoats();
   },
 

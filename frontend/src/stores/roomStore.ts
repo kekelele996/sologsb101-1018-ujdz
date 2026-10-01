@@ -1,12 +1,13 @@
 /**
  * 荫房记录状态管理（Zustand）
- * 维护荫房记录与超标派生统计；湿度越界即回写关联道次为「待复检」。
+ * 维护荫房记录与超标派生统计。值守只管荫房记录与判定：
+ * 越界记录只在 rechecks 表「挂起」一条待复检项到对应道次，绝不回写道次表、不改写已定结论。
  */
 import { create } from 'zustand';
 import { db, createId } from '@/utils/db';
 import type { Room, RoomDraft, RoomVerdict } from '@/types/room';
 import { judgeVerdict } from '@/utils/humidity';
-import { useCoatStore } from './coatStore';
+import { useRecheckStore } from './recheckStore';
 
 interface RoomStoreState {
   rooms: Room[];
@@ -52,10 +53,8 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
     const verdict = judgeVerdict(draft.tempC, draft.humidityPct);
     const row: Room = { ...draft, verdict, id: createId('room'), createdAt: now, updatedAt: now };
     await db.rooms.put(row);
-    // 越界即回写关联道次为待复检
-    if (verdict !== 'suitable') {
-      await useCoatStore.getState().markRecheck(row.bodyId, true);
-    }
+    // 越界只挂起待复检项（边界对象），不回写道次；已定结论不会被改写
+    await useRecheckStore.getState().ensurePendingForRoom(row);
     await get().loadRooms();
     return row;
   },
@@ -67,14 +66,16 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
     const humidityPct = patch.humidityPct ?? existing.humidityPct;
     const verdict = judgeVerdict(tempC, humidityPct);
     await db.rooms.update(id, { ...patch, tempC, humidityPct, verdict, updatedAt: Date.now() } as never);
-    if (verdict !== 'suitable') {
-      await useCoatStore.getState().markRecheck(existing.bodyId, true);
-    }
+    // 越界只挂起待复检项，不回写道次；已定结论不会被改写
+    const updated: Room = { ...existing, ...patch, tempC, humidityPct, verdict, updatedAt: Date.now() };
+    await useRecheckStore.getState().ensurePendingForRoom(updated);
     await get().loadRooms();
   },
 
   async removeRoom(id) {
     await db.rooms.delete(id);
+    // 连带删除该记录未决的挂起项（已定结论保留作历史）
+    await useRecheckStore.getState().removePendingByRoom(id);
     await get().loadRooms();
   },
 

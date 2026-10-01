@@ -18,6 +18,7 @@ import { ROUTES } from './router';
 import { useBodyStore } from './stores/bodyStore';
 import { useCoatStore } from './stores/coatStore';
 import { useRoomStore } from './stores/roomStore';
+import { useRecheckStore } from './stores/recheckStore';
 import { initDatabase } from './utils/db';
 import { BODY_MATERIAL_LABEL, BODY_SHAPE_LABEL, BODY_STATE_LABEL } from './types/body';
 
@@ -35,6 +36,8 @@ export default function App() {
   const loadCoats = useCoatStore((state) => state.loadCoats);
   const rooms = useRoomStore((state) => state.rooms);
   const loadRooms = useRoomStore((state) => state.loadRooms);
+  const rechecks = useRecheckStore((state) => state.rechecks);
+  const loadRechecks = useRecheckStore((state) => state.loadRechecks);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,7 +45,7 @@ export default function App() {
       try {
         await initDatabase();
         if (cancelled) return;
-        await Promise.all([loadBodies(), loadCoats(), loadRooms()]);
+        await Promise.all([loadBodies(), loadCoats(), loadRooms(), loadRechecks()]);
       } catch (error) {
         if (cancelled) return;
         message.error(`本地数据库初始化失败：${error instanceof Error ? error.message : '未知错误'}`);
@@ -51,7 +54,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [loadBodies, loadCoats, loadRooms, message]);
+  }, [loadBodies, loadCoats, loadRooms, loadRechecks, message]);
 
   const currentBody = bodies.find((body) => body.id === currentBodyId) ?? null;
   const selectedKey = location.pathname.startsWith('/coats')
@@ -131,7 +134,11 @@ export default function App() {
             <Button size="small" onClick={() => navigate(ROUTES.coats)}>
               进入道次编排
             </Button>
-            <Badge count={coats.filter((coat) => coat.needRecheck).length} color="#c9963c" title="待复检道次" />
+            <Badge
+              count={rechecks.filter((recheck) => recheck.status === 'pending').length}
+              color="#c9963c"
+              title="待复检挂起"
+            />
           </Space>
         </Header>
 

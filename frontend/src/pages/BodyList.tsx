@@ -31,7 +31,7 @@ import { useCoatProgress } from '@/hooks/useCoatProgress';
 import { useIdbTable } from '@/hooks/useIdbTable';
 import { ROUTES } from '@/router';
 import { DEFAULT_BODY_FILTERS, selectFilteredBodies, useBodyStore } from '@/stores/bodyStore';
-import { useCoatStore } from '@/stores/coatStore';
+import { useRecheckStore } from '@/stores/recheckStore';
 import type { Inlay } from '@/types/inlay';
 import {
   BODY_MATERIAL_LABEL,
@@ -73,7 +73,7 @@ export default function BodyList() {
 
   const inlayTable = useIdbTable<Inlay>((database) => database.inlays, { sortByUpdatedAt: false });
   const { progressOf, currentCoatText, totals } = useCoatProgress();
-  const coats = useCoatStore((state) => state.coats);
+  const rechecks = useRecheckStore((state) => state.rechecks);
 
   const url = useFilterQuery(FILTER_KEYS);
   const [editing, setEditing] = useState<Body | null>(null);
@@ -181,7 +181,7 @@ export default function BodyList() {
           <Row gutter={[16, 16]}>
             {filtered.map((body) => {
               const stat = progressOf(body.id);
-              const recheck = coats.some((coat) => coat.bodyId === body.id && coat.needRecheck);
+              const recheck = rechecks.some((item) => item.bodyId === body.id && item.status === 'pending');
               return (
                 <Col key={body.id} xs={24} md={12} xl={8}>
                   <Card

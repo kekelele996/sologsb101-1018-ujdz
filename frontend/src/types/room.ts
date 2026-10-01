@@ -10,6 +10,8 @@ export interface Room {
   id: string;
   /** 所属胎体 id */
   bodyId: string;
+  /** 归属道次 id（升级时按涂刷日期回填到道次；值守记录时可指定） */
+  coatId: string | null;
   /** 记录日期 yyyy-MM-dd */
   date: string;
   /** 荫房温度（摄氏度） */
@@ -50,6 +52,7 @@ export function createEmptyRoomDraft(bodyId: string): RoomDraft {
   const today = new Date().toISOString().slice(0, 10);
   return {
     bodyId,
+    coatId: null,
     date: today,
     tempC: 24,
     humidityPct: 75,

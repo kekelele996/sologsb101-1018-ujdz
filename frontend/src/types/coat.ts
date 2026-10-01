@@ -25,8 +25,12 @@ export interface Coat {
   thicknessUm: number;
   /** 当前状态 */
   state: CoatState;
-  /** 荫房判定异常时回写的「待复检」标记 */
+  /** 荫房判定异常时回写的「待复检」标记（遗留字段，复检状态以 rechecks 表为准） */
   needRecheck: boolean;
+  /** 荫干时长建议（小时）：依据漆种 + 湿膜厚度算出，漆种改动后失效待重算 */
+  dryingHours: number;
+  /** 该建议依据的漆种；与 paintType 不一致时表示建议已失效，需重算 */
+  dryingHoursPaintType: PaintType;
   createdAt: number;
   updatedAt: number;
 }
@@ -91,5 +95,12 @@ export function createEmptyCoatDraft(bodyId: string, seq: number): CoatDraft {
     thicknessUm: 40,
     state: 'todo',
     needRecheck: false,
+    dryingHours: 24,
+    dryingHoursPaintType: 'raw',
   };
+}
+
+/** 荫干时长建议是否已失效：漆种与建议依据的漆种不一致时，需管理员重算 */
+export function isDryingAdviceStale(coat: Coat): boolean {
+  return coat.dryingHoursPaintType !== coat.paintType;
 }

@@ -1,6 +1,7 @@
 /**
- * /rooms 荫房温湿度记录
- * 按区间判定适宜度并回写关联道次为「待复检」，支持日期区间与判定筛选（同步 URL query）。
+ * /rooms 荫房温湿度记录（值守侧）
+ * 按区间判定适宜度；越界记录只挂起到对应道次等管理员复检，绝不回写道次、不改写已定结论。
+ * 值守只管荫房记录与判定，道次状态推进由管理员负责。
  * 消费 Room、Coat；复用 <FilterBar>、<StatBadge>、<EmptyPanel>。
  */
 import { useMemo, useState } from 'react';
@@ -20,7 +21,7 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import EmptyPanel from '@/components/common/EmptyPanel';
 import FilterBar, { useFilterQuery, type FilterSelectConfig } from '@/components/common/FilterBar';
 import StatBadge from '@/components/common/StatBadge';
@@ -37,6 +38,7 @@ import {
   type RoomVerdict,
 } from '@/types/room';
 import { BODY_SHAPE_LABEL } from '@/types/body';
+import { PAINT_TYPE_LABEL } from '@/types/coat';
 import { dewPoint, dryingAdvice, dryingHours, judgeVerdict, rangeHint, roomStayHours } from '@/utils/humidity';
 
 const FILTER_KEYS = ['verdict'] as const;
@@ -54,7 +56,6 @@ export default function RoomLog() {
   const createRoom = useRoomStore((state) => state.createRoom);
   const updateRoom = useRoomStore((state) => state.updateRoom);
   const removeRoom = useRoomStore((state) => state.removeRoom);
-  const markRecheck = useCoatStore((state) => state.markRecheck);
   const coats = useCoatStore((state) => state.coats);
 
   const url = useFilterQuery(FILTER_KEYS);
@@ -65,7 +66,14 @@ export default function RoomLog() {
   const [draftTemp, setDraftTemp] = useState(24);
   const [draftHumidity, setDraftHumidity] = useState(75);
 
+  const formBodyId = Form.useWatch('bodyId', form) as string | undefined;
+
   const bodyCode = (bodyId: string): string => bodies.find((body) => body.id === bodyId)?.code ?? bodyId;
+  const coatSeq = (coatId: string | null): string => {
+    if (!coatId) return '未归属';
+    const coat = coats.find((item) => item.id === coatId);
+    return coat ? `第 ${coat.seq} 道` : '已删道次';
+  };
 
   const filtered = useMemo(() => {
     const keyword = url.keyword.trim();
@@ -108,6 +116,9 @@ export default function RoomLog() {
     }
     setEditing(null);
     const draft = createEmptyRoomDraft(bodyId);
+    const bodyCoats = coats.filter((coat) => coat.bodyId === bodyId).sort((a, b) => a.seq - b.seq);
+    const activeCoat = bodyCoats.find((coat) => coat.state !== 'done') ?? bodyCoats[bodyCoats.length - 1];
+    draft.coatId = activeCoat?.id ?? null;
     setDraftTemp(draft.tempC);
     setDraftHumidity(draft.humidityPct);
     form.setFieldsValue(draft);
@@ -133,7 +144,7 @@ export default function RoomLog() {
       if (verdict === 'suitable') {
         message.success('已记录荫房温湿度，环境适宜');
       } else {
-        message.warning(`判定为${ROOM_VERDICT_LABEL[verdict]}，已回写关联道次为待复检`);
+        message.warning(`判定为${ROOM_VERDICT_LABEL[verdict]}，已挂起到道次待管理员复检（不影响道次状态）`);
       }
     }
     setOpen(false);
@@ -146,6 +157,12 @@ export default function RoomLog() {
       dataIndex: 'bodyId',
       width: 120,
       render: (value: string) => <Tag color="#8c2f1f">{bodyCode(value)}</Tag>,
+    },
+    {
+      title: '归属道次',
+      dataIndex: 'coatId',
+      width: 100,
+      render: (value: string | null) => <Tag>{coatSeq(value)}</Tag>,
     },
     { title: '温度', dataIndex: 'tempC', width: 90, render: (value: number) => `${value} ℃` },
     { title: '湿度', dataIndex: 'humidityPct', width: 90, render: (value: number) => `${value} %` },
@@ -175,31 +192,25 @@ export default function RoomLog() {
     {
       title: '荫干建议',
       key: 'advice',
-      render: (_value, record) => (
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {dryingAdvice(record.tempC, record.humidityPct, coats.find((coat) => coat.bodyId === record.bodyId)?.thicknessUm ?? 40)}
-          （预计 {dryingHours(record.tempC, record.humidityPct, 40)} 小时）
-        </Typography.Text>
-      ),
+      render: (_value, record) => {
+        const coat = coats.find((item) => item.id === record.coatId);
+        const thickness = coat?.thicknessUm ?? 40;
+        const planned =
+          typeof coat?.dryingHours === 'number' ? coat.dryingHours : dryingHours(record.tempC, record.humidityPct, thickness);
+        return (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {dryingAdvice(record.tempC, record.humidityPct, thickness)}
+            （建议荫干 {planned} 小时）
+          </Typography.Text>
+        );
+      },
     },
     {
       title: '操作',
       key: 'action',
-      width: 230,
+      width: 160,
       render: (_value, record) => (
         <Space size={4} wrap>
-          <Button
-            size="small"
-            type="link"
-            icon={<ReloadOutlined />}
-            onClick={() =>
-              void markRecheck(record.bodyId, record.verdict !== 'suitable').then(() =>
-                message.success(record.verdict === 'suitable' ? '已清除该胎体待复检标记' : '已回写待复检'),
-              )
-            }
-          >
-            回写道次
-          </Button>
           <Button size="small" type="link" icon={<EditOutlined />} onClick={() => openEdit(record)}>
             编辑
           </Button>
@@ -225,7 +236,7 @@ export default function RoomLog() {
       <div className="gb-page-head">
         <div>
           <h2>荫房温湿度记录</h2>
-          <p>{rangeHint()}；越界判定会回写关联道次为「待复检」，作为漆层缺陷回溯依据。</p>
+          <p>{rangeHint()}；值守只管记录与判定，越界记录自动挂起到道次等管理员复检，不改写已定结论。</p>
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           新增记录
@@ -280,7 +291,7 @@ export default function RoomLog() {
             title={rooms.length === 0 ? '还没有荫房记录' : '当前条件下没有记录'}
             description={
               rooms.length === 0
-                ? '每次入荫房时登记温度、湿度与出入房时间，判定结果会自动回写道次。'
+                ? '每次入荫房时登记温度、湿度与出入房时间；越界判定会自动挂起到道次，由管理员复检。'
                 : '试着调整判定或日期区间。'
             }
             actionText="新增记录"
@@ -310,6 +321,7 @@ export default function RoomLog() {
         <Form form={form} layout="vertical" preserve={false} onValuesChange={(changed) => {
           if (typeof changed.tempC === 'number') setDraftTemp(changed.tempC);
           if (typeof changed.humidityPct === 'number') setDraftHumidity(changed.humidityPct);
+          if (changed.bodyId !== undefined) form.setFieldValue('coatId', null);
         }}>
           <Form.Item name="bodyId" label="关联胎体" rules={[{ required: true, message: '请选择胎体' }]}>
             <Select
@@ -317,6 +329,19 @@ export default function RoomLog() {
                 value: body.id,
                 label: `${body.code} · ${BODY_SHAPE_LABEL[body.shape]}`,
               }))}
+            />
+          </Form.Item>
+          <Form.Item name="coatId" label="归属道次">
+            <Select
+              allowClear
+              placeholder="该荫房记录归属的髹涂道次（升级时已按涂刷日期自动归并）"
+              options={coats
+                .filter((coat) => coat.bodyId === formBodyId)
+                .sort((a, b) => a.seq - b.seq)
+                .map((coat) => ({
+                  value: coat.id,
+                  label: `第 ${coat.seq} 道 · ${PAINT_TYPE_LABEL[coat.paintType]} · ${coat.colorName}`,
+                }))}
             />
           </Form.Item>
           <Space size={12} style={{ display: 'flex' }}>
